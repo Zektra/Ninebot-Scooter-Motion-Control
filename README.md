@@ -1,19 +1,11 @@
-# This is a fork! If you have already read this stuff in the original repo by PsychoMnts / Glenn, this is what was added in the README:
-- [This fork](#this-fork)
-- [Issues](#issues)
-- [Releases](#releases)
-- [Custom Telegram group](#custom-telegram-group)
+# This is a fork! I took the version @kearfy made using the original repo by PsychoMnts / Glenn, and made it work with the Ninebot Max scooters using an ESP32 instead.
 
-### **Please use the 3.4 release and configure baseThrottle (ln. 27) accordingly to the comments!**
+## Ninebot-Scooter-Motion-Control
+Modification to legalise the Ninebot Max Scooters in The Netherlands.
 
-Thanks :)
+The idea is to make an small hardware modification on the Ninebot scooters so they comply with the Dutch law. 
 
-## Xiaomi-Scooter-Motion-Control
-Modification to legalise the Xiaomi Mi Scooters in The Netherlands.
-
-The idea is to make an small hardware modification on the Xiaomi scooters so they comply with the Dutch law. 
-
-To use an scooter (or how we call it here: e-step) in The Netherlands, you must comply with the following rules:
+To use a scooter (or how we call it here: e-step) in The Netherlands, you must comply with the following rules:
 - There must NO throttle button.
 - The motor must be limited to 250 watts.
 - The motor can only give a "boost" when you kick with your feet.
@@ -21,9 +13,8 @@ To use an scooter (or how we call it here: e-step) in The Netherlands, you must 
 - Max speed is 25 km/h.
 
 Example:
-Micro has e-steps which are modified to comply with dutch rules with an deactivated throttle, like the MICRO M1 COLIBRI.
+Micro has e-steps which are modified to comply with Dutch rules with an deactivated throttle, like the MICRO M1 COLIBRI.
 https://www.micro-step.nl/nl/emicro-m1-colibri-nl.html
-
 
 The best scooter to do this modification is the Xiaomi Mi Electric Scooter Essential:
 - The motor is 250 watts
@@ -37,37 +28,35 @@ Check out [stepombouw.nl](https://stepombouw.nl) for more information and guides
 
 # How it works
 
-An Arduino Nano will be used to read out the serial-bus of the Xiaomi Mi Scooter.
-The speedometer will be monitored if there are any kicks with your feed. When there is a kick, the throttle will be opened to 100% for 8 seconds and then goes to 10% (0% is regen breaking).
-When the brakehandle is being touched the throttle will be released immediately. Also the Mi scooter itself disables the throttle also in case of braking.
-
-# Custom telegram group
-
-I have created a custom telegram group for questions and the development specially for my V3.X fork of off the original software. This way I hope to reduce the amount of unnessacery messages for the "overall" / "main" group and forward them to the "V3.X group".
-
-- [Main group](https://t.me/joinchat/IuIjHecjckhK1h-a)
-- [This fork](https://t.me/scooter_motion_control_v3)
+An ESP32 will be used to read out the serial-bus of the Ninebot Max Scooter.
+The speed will be monitored to check for any increases that fit a kick. When one is detected, the throttle will be opened at a suitable percentage for 8 seconds.
+When the brake handle is squeezed, throttle will be released immediately. The Max scooter itself also disables throttle upon braking, but this way it won't suddenly accelerate as soon as you release it.
 
 # This fork
 
-I have made this fork to challenge myself in writing a custom firmware for my Xiaomi Mi Essential, but mainly to customize the functionality to my needs.
+As I own a Ninebot Max scooter rather than a Xiaomi, as well as wanting to use an ESP32 over an Arduino Micro, I had to make some modifications to the code to make it work. As the ESP32 lacks any true analog outputs, one will need to use a digipot. This is a tiny chip which converts a digital signal to the preferred analog signal. As digipots are rather scarce, I have decided to use an MCP4725 DAC for now.
 
-The fork is based of off [Glenn's V1.3](https://github.com/PsychoMnts/Xiaomi-Scooter-Motion-Control/blob/main/Xiaomi-Scooter-Motion-Control_V1.3/Xiaomi-Scooter-Motion-Control_V1.3.ino). I chose to number my builds with V3 since this the third public variation to the firmware for the arduino.
+The fork is based of off [Kearfy's V3.4.3](https://github.com/kearfy/Xiaomi-Scooter-Motion-Control/tree/v3.4.3).
 
-This firmware leaves behind the concept of different specified gears. Instead, the vehicle will adjust to the speed that you are going.
-
-Another aspect that makes this firmware stand out is that it is able to detect kicks while the vehicle is throttling. It does so by storing and comparing an expected speed to the actual speed of the vehicle. If the actual speed exceeds expected speed by a defined integer, it is registered as a kick.
+This firmware will get a couple of new features I would like to use on my scooter, and I will try to add the necessary information for you to use them yourself as well.
+Some of the new (planned) features include:
+- Wireless updates
+- Blinkers
+- Presence detection (todo)
 
 **The following section is configurable. Can be set to one kick aswell.**
 
-One kick while throttling will reset the driving timer, two kicks will put the vehicle into INCREASINGSTATE. Whilst in INCREASINGSTATE, the speed of the vehicle can be increased (duh...). When you speed the vehicle by making a kick, the vehicle will adjust to that new speed. If a defined time has passed by without the driver making a new kick, the vehicle will be put back into DRIVINGSTATE and the driving timer will be started again.
-The vehicle will also be switched to INCREASINGSTATE when you first start driving or after you have released the break and increasing speed.
+One kick while throttling will reset the driving timer, two kicks will put the vehicle into INCREASINGSTATE. Whilst in INCREASINGSTATE, the speed of the vehicle can be increased (duh...). When you accelerate the vehicle by making a kick, it will adjust to a new speed. If a defined time has passed without the driver making a new kick, the vehicle will be put back into the DRIVINGSTATE and the driving timer will be started again.
+The vehicle will also be switched to INCREASINGSTATE when you first start driving, or after you have released the break and accelerate again.
 
-Once the driving timer has expired, the throttle will be released. When you make a new kick the vehicle will adjust to the averageSpeed of the past defined history of speeds recordings.
+Once the driving timer expires, the throttle will be released. When you make a new kick the vehicle will adjust to the averageSpeed of the history of speeds recordings.
+
+# Wireless updates
+To update your ESP32 wirelessly, fill in the SSID and password of the network where you'd like to update it. Upon boot you will have a 10 second window to upload the sketch. I usually set it to upload and turn it on somewhere during compiling, which works for me. But depending on the speed of your PC you might want to turn it on earlier/later.
+Note: it will not drive until those 10 seconds have passed.
 
 # Issues
-
-(3.4) Some false kicks may occur, we are working on the optimal calculatedSpeed in the ThrottleSpeed function. Additonally, a variant with PID support is in the making so that the vehicle will better adjust to the expected speed.
+Unknown for now.
 
 # Releases
 
@@ -111,46 +100,37 @@ Once the driving timer has expired, the throttle will be released. When you make
 - V3.4.3
     - Patched issue where total time driving was driveTime + increasmentTime, thus driveTime should now be accurate.
 
+- V1.0.0
+    - Initial version working with the Ninebot Max and ESP32
+    - Tweak some values
+    - Add OTA updates
+    - Add blinkers
 
 # Other firmwares
 
 Feel free to try these other firmwares, I will try to include as many firmwares that are out there.
 
+- Kearfy: https://github.com/kearfy/Xiaomi-Scooter-Motion-Control
 - Glenn: https://github.com/PsychoMnts/Xiaomi-Scooter-Motion-Control
 - Jelle: https://github.com/jelzo/Xiaomi-Scooter-Motion-Control
 - Job: https://github.com/mysidejob/step-support 
 
 # Hardware
 
-- Arduino Nano
-- 1k resistor
-- 0.47uF Capacitor
+- Seeed studio XIAO ESP32C3
+- Adafruit MCP4725
 
-If you don't want to solder on your scooter, you need also:
-
-- JST-ZH male-plug. (or cut it from the trottle, a new one is 2 - 4 euro) https://nl.aliexpress.com/item/1005001992213252.html
-- A male and female 4-pole e-bike plug like: https://nl.aliexpress.com/item/4001091169417.html (Blue plug)
-
+For blinkers:
+- 3-way switch
+- Two LEDs and fitting resistor
 
 # Wiring
 
-![alt text](https://github.com/PsychoMnts/Xiaomi-Scooter-Motion-Control/blob/main/Wiring%20Scheme_v3.png?raw=true)
+![alt text](https://github.com/Zektra/Ninebot-Scooter-Motion-Control/blob/Main/Wiring%20Scheme.png?raw=true)
 
 # Supported models
-- XIAOMI Mi Electric Scooter Essential
-- XIAOMI Mi Electric Scooter 1S EU
-
 Limit motor modification required:
-- XIAOMI Mi Electric Scooter M365 Pro
-- XIAOMI Mi Electric Scooter Pro 2
-
-
-Guide: https://github.com/PsychoMnts/Xiaomi-Scooter-Motion-Control/blob/main/How%20to%20limit%20the%20Xiaomi%20Pro2%20scooter.docx?raw=true
-
-XIAOMI Mi Electric Scooter M365 without Speed-O-Meter is NOT compatible!
-
-To help supporting more scooters, please use the sniffing tool and share the serial bus data. Join our telegram group if you want to help in this project. https://t.me/joinchat/IuIjHecjckhK1h-a
-
+- Ninebot Max
 
 # IenW over steps met stepondersteuning
 

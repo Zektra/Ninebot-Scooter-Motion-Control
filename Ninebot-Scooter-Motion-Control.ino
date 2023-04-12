@@ -1,8 +1,21 @@
 #include <Arduino.h>
 #include <SoftwareSerial.h>
 
-// WARNING: Always try to use the latest version available.
-//          Check here: https://github.com/kearfy/Xiaomi-Scooter-Motion-Control
+// OTA imports
+#include <WiFi.h>
+#include <ESPmDNS.h>
+#include <WiFiUdp.h>
+#include <ArduinoOTA.h>
+
+// OTA constants
+const char* ssid = "SSID";
+const char* password = "PASSWORD";
+
+// DAC set-up
+#include <Adafruit_MCP4725.h>
+Adafruit_MCP4725 dac;
+#define DAC_RESOLUTION (12)
+
 
 // +-============================================================================-+
 // |-================================ SETTINGS ==================================-|
@@ -18,20 +31,21 @@ const int minimumSpeedIncreasment = 6;
 const int enforceMinimumSpeedIncreasmentFrom = 16;
 
 //Defines how much percent the speedBump should go down per km in speed. (it's harder to speed up when driving 20km/u.)
-const float lowerSpeedBump = 0.9875;
+const float lowerSpeedBump = 0.9839;
 
 //After how many X amount of km/u dropped, should the remembered speed to catch up to be forgotten.
 const int forgetSpeed = 10;
 
-//Define the base throttle. between 0 and 45. 
-const int baseThrottle = 45;
+//Define the base throttle. between 0 and baseThrottle.
+const int baseThrottle = 600;
+const int maxThrottle = 3500;
 
 //Additional speed to be added on top of the requested speed. Leave at 4 for now.
 const int additionalSpeed = 0;
 
 //Minimum and maximum speed of your scooter. (You can currently use this for just one mode)
 const int minimumSpeed = 7;
-const int maximumSpeed = 27;
+const int maximumSpeed = 25;
 
 //Minimum speed before throtteling
 const int startThrottle = 5;
@@ -40,16 +54,16 @@ const int startThrottle = 5;
 const int kicksBeforeIncreasment = 1;
 
 //Don't touch unless you know what you are doing.
-const int breakTriggered = 47;
+const int brakeTriggered = 45;
 
 //Defines how long one kick should take.
-const int drivingTime = 5000;
+const int drivingTime = 8000;
 
 //Defines how much time the amount of kicks before increasment can take up.
 const int kickResetTime = 2000;
 
 //Defines how much time should be in between two kicks.
-const int kickDelay = 300;
+const int kickDelay = 200;
 
 //Defines the amount of time the INCREASING state will wait for a new kick.
 const int increasmentTime = 2000;
@@ -57,11 +71,8 @@ const int increasmentTime = 2000;
 //used to calculate the average speed.
 const int historySize = 20;
 
-// Arduino pin where throttle is connected to (only pin 9 & 10 is ok to use)
-const int THROTTLE_PIN = 10;
-
 //TX & RX pin
-SoftwareSerial SoftSerial(2, 3); // RX, TX
+SoftwareSerial SoftSerial(D2, 3); // RX, TX
 
 //END OF SETTINGS
 
@@ -76,6 +87,8 @@ unsigned long drivingTimer = 0;
 unsigned long kickResetTimer = 0;
 unsigned long kickDelayTimer = 0;
 unsigned long increasmentTimer = 0;
+unsigned long blinkTimer = 0;
+bool blink = false;
 bool kickAllowed = true;
 
 int BrakeHandle;
@@ -94,7 +107,7 @@ uint8_t State = 0;
 #define READYSTATE 0
 #define INCREASINGSTATE 1
 #define DRIVINGSTATE 2
-#define BREAKINGSTATE 3
+#define BRAKINGSTATE 3
 #define DRIVEOUTSTATE 4
 
 uint8_t readBlocking() {
@@ -103,31 +116,87 @@ uint8_t readBlocking() {
 }
 
 void setup() {
-    for (int i = 0; i < historySize; i++) history[i] = 0;
+    // DAC
+    dac.begin(0x62);
+    delay(100);
+    dac.setVoltage(600, false);
+    pinMode(D1, OUTPUT);
+
+    // OTA setup
     Serial.begin(115200);
-    SoftSerial.begin(115200);
     Serial.println("Starting Logging data...");
-    TCCR1B = TCCR1B & 0b11111001; //Set PWM of PIN 9 & 10 to 32 khz
-    ThrottleWrite(45);
+    SoftSerial.begin(115200);
+    Serial.println("UART started");
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+
+    ArduinoOTA
+      .onStart([]() {
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH)
+          type = "sketch";
+        else // U_SPIFFS
+          type = "filesystem";
+
+        // NOTE: if updating SPIFFS this would be the place to unmount SPIFFS using SPIFFS.end()
+        Serial.println("Start updating " + type);
+      })
+      .onEnd([]() {
+        Serial.println("\nEnd");
+      })
+      .onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+      })
+      .onError([](ota_error_t error) {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+      });
+
+    ArduinoOTA.begin();
+
+    Serial.println("Ready");
+    Serial.print("IP address: ");
+    Serial.println(WiFi.localIP());
+    // end OTA setup
+
+    digitalWrite(D1, LOW);
+    currentTime = millis();
+    while(millis()-currentTime < 10000)
+    {
+        ArduinoOTA.handle();
+        digitalWrite(D1, HIGH);
+    }
+    WiFi.disconnect();
+    WiFi.mode(WIFI_OFF);
+    delay(100);
+    digitalWrite(D1, LOW);
+
+    for (int i = 0; i < historySize; i++) history[i] = 0;
 }
 
 uint8_t buff[256];
 void loop() {
+    handleBlink();
+
     int w = 0;
-    while (readBlocking() != 0x55);
-    if (readBlocking() != 0xAA) return;
+    while (readBlocking() != 0x5A);
+    if (readBlocking() != 0xA5) return;
     uint8_t len = readBlocking();
     buff[0] = len;
     if (len > 254) return;
     uint8_t addr = readBlocking();
     buff[1] = addr;
     uint16_t sum = len + addr;
-    for (int i = 0; i < len; i++) { uint8_t curr = readBlocking(); buff[i + 2] = curr; sum += curr; }
+    for (int i = 0; i < len + 3; i++) { uint8_t curr = readBlocking(); buff[i + 2] = curr; sum += curr; }
     uint16_t checksum = (uint16_t) readBlocking() | ((uint16_t) readBlocking() << 8);
     if (checksum != (sum ^ 0xFFFF)) return;
-
-    if (buff[1] == 0x20 && buff[2] == 0x65) BrakeHandle = buff[6];
-    if (buff[1] == 0x21 && buff[2] == 0x64 && buff[8] != 0) Speed = buff[8];
+    //Serial.println("endHex");
+    if (buff[2] == 0x20 && buff[3] == 0x65) BrakeHandle = buff[7];
+    if (buff[2] == 0x21 && buff[3] == 0x64 && buff[9] != 0) Speed = buff[9];
 
     //Update the current index in the history and recalculate the average speed.
     historyTotal = historyTotal - history[historyIndex];
@@ -143,7 +212,7 @@ void loop() {
     currentTime = millis();
     if (kickResetTimer != 0 && kickResetTimer + kickResetTime < currentTime && State == DRIVINGSTATE) resetKicks();
     if (increasmentTimer != 0 && increasmentTimer + increasmentTime < currentTime && State == INCREASINGSTATE) endIncrease();
-    if (drivingTimer != 0 && drivingTimer + drivingTime - increasmentTime < currentTime && State == DRIVINGSTATE) endDrive();
+    if (drivingTimer != 0 && drivingTimer + drivingTime < currentTime && State == DRIVINGSTATE) endDrive();
     if (kickDelayTimer == 0 || (kickDelayTimer != 0 && kickDelayTimer + kickDelay < currentTime)) {
         kickAllowed = true;
         kickDelayTimer = 0;
@@ -155,18 +224,17 @@ void loop() {
 void motion_control() {
     if ((Speed != 0) && (Speed < startThrottle)) {
         // If speed is under 5 km/h, stop throttle
-        ThrottleWrite(45); //  0% throttle
+        throttleWrite(baseThrottle); //  0% throttle
     }
 
-    if (BrakeHandle > breakTriggered) {
-        ThrottleWrite(45); //close throttle directly when break is touched. 0% throttle
-        if (State != BREAKINGSTATE) {
-            State = BREAKINGSTATE;
+    if (BrakeHandle > brakeTriggered) {
+        throttleWrite(baseThrottle); //close throttle directly when brake is touched. 0% throttle
+        if (State != BRAKINGSTATE) {
+            State = BRAKINGSTATE;
             drivingTimer = 0; kickResetTimer = 0; increasmentTimer = 0;
-            Serial.println("BREAKING ~> Handle pulled.");
+            Serial.println("BRAKING ~> Handle pulled.");
         }
     }
-
     switch(State) {
         case READYSTATE:
             if (Speed > startThrottle) {
@@ -179,8 +247,7 @@ void motion_control() {
                 } else {
                     temporarySpeed = minimumSpeed;
                 }
-                
-                ThrottleSpeed(temporarySpeed);
+                throttleSpeed(temporarySpeed);
                 State = INCREASINGSTATE;
                 Serial.println("INCREASING ~> The speed has exceeded the minimum throttle speed.");
             }
@@ -197,12 +264,12 @@ void motion_control() {
 
             if (kickCount >= 1) {
                 if (Speed > temporarySpeed + calculateMinimumSpeedIncreasment(Speed)) {
-                    temporarySpeed = ValidateSpeed(Speed);
+                    temporarySpeed = validateSpeed(Speed);
                 } else {
-                    temporarySpeed = ValidateSpeed(temporarySpeed + calculateMinimumSpeedIncreasment(Speed));
+                    temporarySpeed = validateSpeed(temporarySpeed + calculateMinimumSpeedIncreasment(Speed));
                 }
 
-                ThrottleSpeed(temporarySpeed);
+                throttleSpeed(temporarySpeed);
             }
 
             kickCount = 0;
@@ -217,21 +284,21 @@ void motion_control() {
 
             if (kickCount >= kicksBeforeIncreasment) {
                 if (Speed > expectedSpeed + calculateMinimumSpeedIncreasment(Speed)) {
-                    temporarySpeed = ValidateSpeed(Speed);
+                    temporarySpeed = validateSpeed(Speed);
                 } else {
-                    temporarySpeed = ValidateSpeed(expectedSpeed + calculateMinimumSpeedIncreasment(Speed));
+                    temporarySpeed = validateSpeed(expectedSpeed + calculateMinimumSpeedIncreasment(Speed));
                 }
 
-                ThrottleSpeed(temporarySpeed);
+                throttleSpeed(temporarySpeed);
                 State = INCREASINGSTATE;
                 drivingTimer = 0; kickResetTimer = 0;
                 Serial.println("INCREASING ~> The least amount of kicks before increasment has been reached.");
             }
 
             break;
-        case BREAKINGSTATE:
+        case BRAKINGSTATE:
         case DRIVEOUTSTATE:
-            if (BrakeHandle > breakTriggered) break;
+            if (BrakeHandle > brakeTriggered) break;
             if (State == DRIVEOUTSTATE && Speed + forgetSpeed <= expectedSpeed) {
                 Serial.println("DRIVEOUT ~> Speed has dropped too far under expectedSpeed. Dumping expected speed.");
                 expectedSpeed = 0;
@@ -244,40 +311,40 @@ void motion_control() {
             } else if (Speed >= averageSpeed + calculateSpeedBump(averageSpeed)) {
                 if (State == DRIVEOUTSTATE) {
                     if (Speed > averageSpeed + calculateMinimumSpeedIncreasment(averageSpeed)) {
-                        temporarySpeed = ValidateSpeed(Speed);
+                        temporarySpeed = validateSpeed(Speed);
                     } else {
                         if (Speed > expectedSpeed) {
-                            temporarySpeed = ValidateSpeed(averageSpeed + calculateMinimumSpeedIncreasment(averageSpeed));
+                            temporarySpeed = validateSpeed(averageSpeed + calculateMinimumSpeedIncreasment(averageSpeed));
                         } else {
-                            temporarySpeed = ValidateSpeed(expectedSpeed);
+                            temporarySpeed = validateSpeed(expectedSpeed);
                         }
                     }
                 } else {
-                    temporarySpeed = ValidateSpeed(Speed);
+                    temporarySpeed = validateSpeed(Speed);
                 }
 
                 kickDelayTimer = currentTime;
-                ThrottleSpeed(temporarySpeed);
+                throttleSpeed(temporarySpeed);
                 State = INCREASINGSTATE;
                 Serial.println("INCREASING ~> Break released and speed increased.");
             }
-            
+
             break;
         default:
-            ThrottleWrite(45);
-            State = BREAKINGSTATE;
+            throttleWrite(baseThrottle);
+            State = BRAKINGSTATE;
             drivingTimer = 0; kickResetTimer = 0; increasmentTimer = 0;
-            Serial.println("BREAKING ~> Unknown state detected");
+            Serial.println("BRAKING ~> Unknown state detected");
     }
 
 }
 
-int resetKicks() {
+void resetKicks() {
     kickResetTimer = 0;
     kickCount = 0;
 }
 
-int endIncrease() {
+void endIncrease() {
     expectedSpeed = temporarySpeed;
     kickCount = 0;
     State = DRIVINGSTATE;
@@ -286,9 +353,9 @@ int endIncrease() {
     Serial.println("DRIVING ~> The speed has been stabilized.");
 }
 
-int endDrive() {
+void endDrive() {
     drivingTimer = 0; kickResetTimer = 0;
-    ThrottleWrite(45);
+    throttleWrite(baseThrottle);
     State = DRIVEOUTSTATE;
     Serial.println("READY ~> Speed has dropped under the minimum throttle speed.");
 }
@@ -301,7 +368,7 @@ int calculateMinimumSpeedIncreasment(int requestedSpeed) {
     return (requestedSpeed > enforceMinimumSpeedIncreasmentFrom ? minimumSpeedIncreasment : 0);
 }
 
-int ValidateSpeed(int requestedSpeed) {
+int validateSpeed(int requestedSpeed) {
     if (requestedSpeed < minimumSpeed) {
         return minimumSpeed;
     } else if (requestedSpeed > maximumSpeed) {
@@ -311,24 +378,34 @@ int ValidateSpeed(int requestedSpeed) {
     }
 }
 
-int ThrottleSpeed(int requestedSpeed) {
+void throttleSpeed(int requestedSpeed) {
     if (requestedSpeed == 0) {
-        ThrottleWrite(45);
+        throttleWrite(baseThrottle);
     } else if (requestedSpeed == maximumSpeed) {
-        ThrottleWrite(233);
+        throttleWrite(maxThrottle);
     } else {
-        int throttleRange = 233 - 45;
-        float calculatedThrottle = baseThrottle + ((requestedSpeed + additionalSpeed) / (float) maximumSpeed * throttleRange);
-        ThrottleWrite((int) calculatedThrottle);
+        int throttleRange = maxThrottle - baseThrottle;
+        float calculatedThrottle = baseThrottle + (((requestedSpeed + additionalSpeed) * throttleRange) / (float) maximumSpeed);
+        Serial.println(calculatedThrottle);
+        throttleWrite((int) calculatedThrottle);
     }
 }
 
-int ThrottleWrite(int value) {
-    if (value < 45) {
-        analogWrite(THROTTLE_PIN, 45);
-    } else if (value > 233) {
-        analogWrite(THROTTLE_PIN, 233);
-    } else {      
-        analogWrite(THROTTLE_PIN, value);
+void throttleWrite(int value) {
+    if (value < baseThrottle) {
+        dac.setVoltage(600,false);
+    } else if (value > maxThrottle) {
+        dac.setVoltage(3500,false);
+    } else {
+        dac.setVoltage(value,false);
+    }
+}
+
+void handleBlink() {
+    if (currentTime - blinkTimer > 500){
+      blinkTimer = currentTime;
+      currentTime = millis();
+      blink = !blink;
+      digitalWrite(D1, blink ? HIGH : LOW);
     }
 }
