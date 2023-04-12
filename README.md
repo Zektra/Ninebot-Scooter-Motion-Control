@@ -103,6 +103,14 @@ Once the driving timer has expired, the throttle will be released. When you make
     - Added forgetSpeed since you could currently drive out from 25km/u to 6km/u, make a kick and go full speed again.
     - Made small changes in the behaviour of the DRIVEOUTSTATE.
 
+- V3.4.2
+
+    - Updated default config options to ideal values. Default values should now be sufficient for all Xiaomi models.
+    - Updated kick detection in driveout state as it calculated the speedbump based on actual speed instead of average speed.
+
+- V3.4.3
+    - Patched issue where total time driving was driveTime + increasmentTime, thus driveTime should now be accurate.
+
 
 # Other firmwares
 
