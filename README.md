@@ -23,8 +23,9 @@ The best scooter to do this modification is the Xiaomi Mi Electric Scooter Essen
 Check out [stepombouw.nl](https://stepombouw.nl) for more information and guides!
 
 # Librarys
-
-- https://github.com/contrem/arduino-timer (For 3.1 and 3.2)
+- EspSoftwareSerial
+- WiFi101
+- Adafruit MCP4725
 
 # How it works
 
